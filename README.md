@@ -11,23 +11,36 @@ make help
 
 CA-admin manages your OpenSSL CA
 
-init   - Create & initialize ca directory.
-careq  - Create certificate request of CA.
-cacert - Sign certificate request of CA.
-req    - Create certificate request.
-cert   - Sign certificate request.
-server - Sign certificate request as server cert.
-client - Sign certificate request as client cert.
-mixed  - Sign certificate request as client/server.
-verify - Verify certificate.
-revoke - Revoke certificate.
-crl    - Generate CRL.
-print  - Print a ceritificate.
+make <cmd> [ NAME=<certname> ] [ KEYTYPE=rsa|ec ]
+
+Defaults:
+  NAME = new
+  KEYTYPE = ec
+  KEY_OPTS = 
+  CAROOT = $(pwd)
+  CACONF = $(CAROOT)/openssl-ca.conf
+  CATOP = $(CAROOT)/$(KEYTYPE)
+  CASTATE = $(CATOP)/state
+
+<cmd> can be:
+  init   - Create & initialize ca directory.
+  careq  - Create certificate request of CA.
+  signca - Sign certificate request of CA.
+  sign   - Sign certificate request.
+  server - Create certificate request for server cert.
+  client - Create certificate request for client cert.
+  mixed  - Create certificate request for client/server.
+  verify - Verify certificate.
+  revoke - Revoke certificate.
+  crl    - Generate CRL.
+  print  - Print a ceritificate.
+  printr - Print a request.
 ~~~~
 
-By default, the CA will use the prime256v1 elliptical curve key type.
-To use RSA, use `KEYOPTS = -newkey rsa:2048`
-Default expiration is 10 years, change with `DAYS = -days #`
+Default keytype is prime256v1 elliptical curve, if `KEYTYPE=rsa` then
+it's a 2048 RSA key.
+
+Default expiration is year 2100 (set in `openssl-ca.conf`)
 
 ## Setup
 
@@ -37,21 +50,21 @@ Default expiration is 10 years, change with `DAYS = -days #`
 make init - initialize directories, db files
 ~~~~
 
-Creates:
+Creates $(KEYTYPE) directory containing:
  - `certs` - signed certificates
  - `private` - keys (protected)
  - `crl` - revokation lists
  - `reqs` - certificate requests
- - `newcerts` - all certificates created (hash based)
+ - `newcerts` - all certificates created (serial based)
  - `state` - contains serial, index.txt
 
 ### Create your new Certificate Authority certificate and key
 
 ~~~~
-make cacert - will prompt for CA name, and key passphase
+make signca - will prompt for CA name, and key passphase
 ~~~~
 
-Creates:
+Creates in $(KEYTYPE):
  - `certs/ca.crt` - CA certificate
  - `private/ca.key` - CA key
  - `reqs/ca.csr` - CA request (created before self-sign)
@@ -59,33 +72,33 @@ Creates:
 Updates:
  - `state/index.txt` - CA added
  - `state/serial` - create random serial #
- - `newcerts/{HASH}.pem` - CA certificate (archive)
+ - `newcerts/{SERIAL}.pem` - CA certificate (archive)
 
 ## Basic Usage
 
-### Create a new certificate request and key (default NAME is *new*)
+### Create a new certificate/key for a webserver (default NAME is *new*)
 
 ~~~~
-make NAME=mycert req - will prompt for "CN"
+make NAME=mycert server - will prompt for "CN"
 ~~~~
 
-Creates:
+Creates in $(KEYTYPE):
  - `reqs/mycert.csr` - new certificate request
  - `private/mycert.key` - new key   
 
 ### Sign the certicate using the CA for webserver use
 
 ~~~~
-make NAME=mycert server - will prompt for CA key passphase
+make NAME=mycert sign - will prompt for CA key passphase
 ~~~~
 
-Creates:
+Creates in $(KEYTYPE):
  - `certs/mycert.crt` - new signed certificate
 
 Updates:
  - `state/index.txt` - mycert added
  - `state/serial` - updates serial #
- - `newcerts/{HASH}.pem` - mycert certificate (archive)
+ - `newcerts/{SERIAL}.pem` - mycert certificate (archive)
 
 ### Display new certificate details
 
@@ -105,7 +118,7 @@ make NAME=mycert verify
 make NAME=mycert revoke - will prompt for CA key passphrase
 ~~~~
 
-Creates:
+Creates in $(KEYTYPE):
  - `crt/crl01.pem` - creates new revokation list
  - `crt/crl.pem` - link to new crl01.pem
 

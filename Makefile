@@ -1,10 +1,10 @@
 #
 # CA Admin - OpenSSL Certificate Authority Administration
 #
-# Version: 1.1.0
+# Version: 2.0.0
 # Author: Scott Shambarger <devel@shambarger.net>
 #
-# Copyright (C) 2018-2020 Scott Shambarger
+# Copyright (C) 2018-2022 Scott Shambarger
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -20,88 +20,131 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 # Refs:
-#  Inspired by: https://gist.github.com/ab/4570034
 #  Good CA howto: https://jamielinux.com/docs/openssl-certificate-authority/
 #
 space := $(NULL) $(NULL)
 myescape = $(subst $(space),\$(space),$(1))
-# CATOP must be an absolute path
-CATOP = $(call myescape,$(PWD))
-CACONF = $(CATOP)/openssl-ca.conf
-CASTATE = $(CATOP)/state
 
-KEYOPTS = -newkey ec -pkeyopt ec_paramgen_curve:prime256v1
-#KEYOPTS = -newkey rsa:2048
+# RSA defaults
+override DEF_RSA_KEY_OPTS = -newkey rsa:2048
+# EC defaults
+override DEF_EC_KEY_OPTS = -newkey ec -pkeyopt ec_paramgen_curve:prime256v1
 
-OPENSSL = openssl
-DAYS = -days 3650
-CADAYS = -days 3650
-CRLDAYS = -crldays 3650
-REQ = $(OPENSSL) req -config $(CACONF)
-REQ_DEPS = $(CATOP)/reqs $(CATOP)/private $(CACONF)
-CA = $(OPENSSL) ca -config $(CACONF)
-# these should match $(CACONF) entries
-CA_DEPS = $(CATOP)/certs $(CATOP)/crl $(CATOP)/private $(CATOP)/newcerts $(CATOP)/reqs
-CA_DEPS += $(CASTATE)/serial $(CASTATE)/index.txt $(CACONF)
-VERIFY = $(OPENSSL) verify
-X509 = $(OPENSSL) x509
+# param defaults:
+override DEF_KEYTYPE = ec
+override DEF_KEYOPTS := $(DEF_RSA_KEYOPTS)
+override DEF_NAME = new
+# CAROOT must be an absolute path
+CAROOT := $(call myescape,$(PWD))
 
-CA_CERT_REQ_FILE = $(CATOP)/reqs/ca.csr
-CA_CERT_KEY_FILE = $(CATOP)/private/ca.key
-CA_CERT_FILE = $(CATOP)/certs/ca.crt
+override DEF_CACONF = $(CAROOT)/openssl-ca.conf
+override DEF_CATOP = $(CAROOT)/$(KEYTYPE)
+override DEF_CASTATE = $(CATOP)/state
+
+# validate NAME
+NAME := $(DEF_NAME)
+ifeq '$(NAME)' ''
+$(error 'NAME cannot be empty')
+endif
+
+# validate KEYTYPE
+KEYTYPE := $(DEF_KEYTYPE)
+ifeq '$(KEYTYPE)' 'rsa'
+	KEY_OPTS := $(DEF_RSA_KEY_OPTS)
+else ifeq '$(KEYTYPE)' 'ec'
+	KEY_OPTS := $(DEF_EC_KEY_OPTS)
+else ifeq '$(KEYTYPE)' ''
+$(error 'KEYTYPE cannot be empty')
+else
+$(error 'Unknown KEYTYPE $(KEYTYPE) (try "make help")')
+endif
+
+# validate KEY_OPTS
+ifeq '$(KEY_OPTS)' ''
+$(error 'KEY_OPTS cannot be empty')
+endif
+
+CACONF := $(DEF_CACONF)
+CATOP := $(DEF_CATOP)
+CASTATE := $(DEF_CASTATE)
+
+# the rest are relative to $(CATOP)
+
+# these should match entries in $(CACONF)
+REQS_DIR = $(CATOP)/reqs
+PRIV_DIR = $(CATOP)/private
+CERTS_DIR = $(CATOP)/certs
+
+CA_CERT_REQ_FILE = $(REQS_DIR)/ca.csr
+CA_CERT_KEY_FILE = $(PRIV_DIR)/ca.key
+CA_CERT_FILE = $(CERTS_DIR)/ca.crt
+
+CERT_REQ_FILE = $(REQS_DIR)/$(NAME).csr
+CERT_KEY_FILE = $(PRIV_DIR)/$(NAME).key
+CERT_FILE = $(CERTS_DIR)/$(NAME).crt
+
+override EXT_FILE = $(CATOP)/tmp.conf
+REQ_OPTS = subjectKeyIdentifier=hash 
+REQ_OPTS += keyUsage=critical,digitalSignature,keyEncipherment
 
 CRL_LINK = $(CATOP)/crl/crl.pem
 
-CERT_USAGE = serverAuth, clientAuth
+# prob shouldn't be overridden
+override OPENSSL = openssl
+override REQ = $(OPENSSL) req
+override CA = $(OPENSSL) ca -config $(CACONF) -name CA_$(KEYTYPE)
+override VERIFY = $(OPENSSL) verify
+override X509 = $(OPENSSL) x509
 
-ifneq '$(NAME)' ''
-	CERT_REQ_FILE = $(CATOP)/reqs/$(NAME).csr
-	CERT_KEY_FILE = $(CATOP)/private/$(NAME).key
-	CERT_FILE = $(CATOP)/certs/$(NAME).crt
-else
-	CERT_REQ_FILE = $(CATOP)/reqs/new.csr
-	CERT_KEY_FILE = $(CATOP)/private/new.key
-	CERT_FILE = $(CATOP)/certs/new.crt
-endif
+override REQ_DEPS = $(CACONF) $(REQS_DIR) $(PRIV_DIR)
+override CA_DEPS = $(REQ_DEPS) $(CERTS_DIR) $(CATOP)/crl $(CATOP)/newcerts
+override CA_DEPS += $(CASTATE)/serial $(CASTATE)/index.txt
 
 .SUFFIXES: .pem .crt .p12
-.PHONY: help debug init careq cacert req cert verify revoke crl clean
-.PHONY: client server mixed print new_ext server_ext revoke_cert
+.PHONY: help debug init careq signca sign verify revoke revoke_cert crl remove
+.PHONY: hasca hascert hasreq client server mixed print printr 
 
 help:
 	@echo 'CA-admin manages your OpenSSL CA'
-	@echo ''
-	@echo 'make <cmd> [ NAME=<certname> ]'
-	@echo ''
-	@echo '<certname> is "new" by default'
+	@echo
+	@echo 'make <cmd> [ NAME=<certname> ] [ KEYTYPE=rsa|ec ]'
+	@echo
+	@echo 'Defaults:'
+	@echo '  NAME = $(value DEF_NAME)'
+	@echo '  KEYTYPE = $(value DEF_KEYTYPE)'
+	@echo '  KEY_OPTS = $(value DEF_KEY_OPTS)'
+	@echo '  CAROOT = $(value CAROOT)'
+	@echo '  CACONF = $(value DEF_CACONF)'
+	@echo '  CATOP = $(value DEF_CATOP)'
+	@echo '  CASTATE = $(value DEF_CASTATE)'
+	@echo
 	@echo '<cmd> can be:'
-	@echo 'init   - Create & initialize ca directory.'
-	@echo 'careq  - Create certificate request of CA.'
-	@echo 'cacert - Sign certificate request of CA.'
-	@echo 'req    - Create certificate request.'
-	@echo 'cert   - Sign certificate request.'
-	@echo 'server - Sign certificate request as server cert.'
-	@echo 'client - Sign certificate request as client cert.'
-	@echo 'mixed  - Sign certificate request as client/server.'
-	@echo 'verify - Verify certificate.'
-	@echo 'revoke - Revoke certificate.'
-	@echo 'crl    - Generate CRL.'
-	@echo 'print  - Print a ceritificate.'
-	@echo ''
-	@echo 'Configuration:'
-	@echo 'CATOP:  $(CATOP)'
-	@echo 'CACONF: $(CACONF)'
-	@echo 'CASTATE: $(CASTATE)'
-	@echo 'KEYOPTS: $(KEYOPTS)'
+	@echo '  init   - Create & initialize ca directory.'
+	@echo '  careq  - Create certificate request of CA.'
+	@echo '  signca - Sign certificate request of CA.'
+	@echo '  sign   - Sign certificate request.'
+	@echo '  server - Create certificate request for server cert.'
+	@echo '  client - Create certificate request for client cert.'
+	@echo '  mixed  - Create certificate request for client/server.'
+	@echo '  verify - Verify certificate.'
+	@echo '  revoke - Revoke certificate.'
+	@echo '  crl    - Generate CRL.'
+	@echo '  print  - Print a ceritificate.'
+	@echo '  printr - Print a request.'
 
 debug:
-	@echo 'CATOP:  $(CATOP)'
-	@echo 'CACONF: $(CACONF)'
-	@echo 'CASTATE: $(CASTATE)'
-	@echo 'NAME: $(NAME)'
-	@echo 'CERT_REQ_FILE: $(CERT_REQ_FILE)'
-	@echo 'CERT_KEY_FILE: $(CERT_KEY_FILE)'
-	@echo 'CERT_FILE:     $(CERT_FILE)'
+	@echo 'NAME = $(NAME)'
+	@echo 'KEYTYPE = $(KEYTYPE)'
+	@echo 'KEY_OPTS = $(KEY_OPTS)'
+	@echo 'CACONF = $(CACONF)'
+	@echo 'CATOP = $(CATOP)'
+	@echo 'CASTATE = $(CASTATE)'
+	@echo 'CA_CERT_REQ_FILE = $(CA_CERT_REQ_FILE)'
+	@echo 'CA_CERT_KEY_FILE = $(CA_CERT_KEY_FILE)'
+	@echo 'CA_CERT_FILE = $(CA_CERT_FILE)'
+	@echo 'CERT_REQ_FILE = $(CERT_REQ_FILE)'
+	@echo 'CERT_KEY_FILE = $(CERT_KEY_FILE)'
+	@echo 'CERT_FILE = $(CERT_FILE)'
 
 .pem.crt:
 	$(X509) -in $< -out '$@'
@@ -121,7 +164,7 @@ $(CASTATE) $(CASTATE)/index.txt:
 	touch '$@'
 
 $(CASTATE)/crlnumber: | $(CASTATE)
-	echo 01 > '$@'
+	@echo 01 > '$@'
 
 $(CASTATE)/serial: | $(CASTATE)
 	$(OPENSSL) rand -hex 8 > '$@'
@@ -131,28 +174,27 @@ $(CATOP):
 	@echo 'Creating new CA directory'
 	mkdir -p -m 755 '$@'
 
-$(CATOP)/reqs $(CATOP)/certs $(CATOP)/crl $(CATOP)/newcerts: | $(CATOP)
+$(REQS_DIR) $(CERTS_DIR) $(CATOP)/crl $(CATOP)/newcerts: | $(CATOP)
 	mkdir -p -m 755 '$@'
 
-$(CATOP)/private: | $(CATOP)
+$(PRIV_DIR): | $(CATOP)
 	mkdir -p -m 700 '$@'
 
 careq: $(CA_CERT_KEY_FILE) $(CA_CERT_REQ_FILE)
 
-$(CA_CERT_REQ_FILE): | $(CATOP)/reqs
-$(CA_CERT_KEY_FILE): | $(CATOP)/private
 $(CA_CERT_REQ_FILE) $(CA_CERT_KEY_FILE): | $(REQ_DEPS)
-	$(REQ) -new \
-		$(KEYOPTS) \
+	$(REQ) -new -config $(CACONF) \
+		$(KEY_OPTS) \
 		-keyout $(CA_CERT_KEY_FILE) \
 		-out $(CA_CERT_REQ_FILE)
-	@chmod 600 $(CA_CERT_KEY_FILE) $(CA_CERT_REQ_FILE)
+	chmod 600 $(CA_CERT_KEY_FILE) $(CA_CERT_REQ_FILE)
 
-cacert: $(CA_CERT_FILE)
+signca: $(CA_CERT_FILE)
 
 $(CA_CERT_FILE): $(CA_CERT_REQ_FILE) $(CA_CERT_KEY_FILE) | $(CA_DEPS)
-	$(CA) $(CADAYS) -batch \
-		-keyfile $(CA_CERT_KEY_FILE) -selfsign \
+	$(CA) -batch \
+		-keyfile $(CA_CERT_KEY_FILE) \
+		-selfsign \
 		-extensions v3_ca \
 		-out '$@' \
 		-infiles $(CA_CERT_REQ_FILE)
@@ -164,38 +206,45 @@ hasca:
 hascert:
 	@[[ -f $(CERT_FILE) ]] || { echo 'Missing cert file: $(CERT_FILE)'; false; }
 
-req: $(CERT_KEY_FILE) $(CERT_REQ_FILE)
+hasreq:
+	@[[ -f $(CERT_REQ_FILE) ]] || { echo 'Missing request file: $(CERT_REQ_FILE)'; false; }
 
-$(CERT_REQ_FILE): | $(CATOP)/reqs
-$(CERT_KEY_FILE): | $(CATOP)/private
-$(CERT_REQ_FILE) $(CERT_KEY_FILE): | $(REQ_DEPS)
-	$(REQ) -new \
-		$(KEYOPTS) \
-		-nodes -keyout $(CERT_KEY_FILE) \
+
+# as of openssl v1.1.1l, -addext doesn't work (adds randomly to -reqexts...)
+# (also, -text prints something different that whats in req produced)
+# so we create a temporary config
+$(CERT_REQ_FILE) $(CERT_KEY_FILE): | hasca $(REQ_DEPS)
+	@[[ $$REQ_CN ]] || read -p "Enter CommonName: " REQ_CN; \
+	rm -f $(EXT_FILE); \
+	echo "[ req ]" >> $(EXT_FILE) || exit; \
+	echo "default_md = sha256" >> $(EXT_FILE); \
+	echo "req_extensions = v3_req" >> $(EXT_FILE); \
+	echo "distinguished_name = req_name" >> $(EXT_FILE); \
+	echo "[ req_name ]" >> $(EXT_FILE); \
+	echo "commonName = Common Name" >> $(EXT_FILE); \
+	echo "[ v3_req ]" >> $(EXT_FILE); \
+	for item in $(REQ_OPTS); do \
+	  echo "$$item" >> $(EXT_FILE) || exit; \
+	done; \
+	$(REQ) -new -batch -config $(EXT_FILE) \
+		$(KEY_OPTS) \
+		-subj "/CN=$${REQ_CN}/" \
+		-nodes \
+		-keyout $(CERT_KEY_FILE) \
 		-out $(CERT_REQ_FILE)
-	@chmod 600 $(CERT_KEY_FILE) $(CERT_REQ_FILE)
+	@rm -f $(EXT_FILE)
+	chmod 600 $(CERT_KEY_FILE) $(CERT_REQ_FILE)
 
-new_ext: cacert $(CERT_REQ_FILE) | $(CASTATE)
-	$(eval EXT_OPTS = -extfile $(CASTATE)/exts.conf)
-	@echo 'subjectKeyIdentifier = hash' > $(CASTATE)/exts.conf
-	@echo 'authorityKeyIdentifier = keyid:always' >> $(CASTATE)/exts.conf
-	@echo 'keyUsage = critical, digitalSignature, keyEncipherment' >> $(CASTATE)/exts.conf
-	@echo 'extendedKeyUsage = $(CERT_USAGE)' >> $(CASTATE)/exts.conf
+client: REQ_OPTS += extendedKeyUsage=clientAuth
+client: $(CERT_REQ_FILE) | printr
 
-client: CERT_USAGE = clientAuth
-client: new_ext cert
+server: REQ_OPTS += extendedKeyUsage=serverAuth
+server: REQ_OPTS += subjectAltName=DNS:$${REQ_CN}
+server: $(CERT_REQ_FILE) | printr
 
-server_ext: new_ext
-	$(eval CN := $(shell $(OPENSSL) req -in $(CERT_REQ_FILE) -noout -text | awk -e '/Subject: CN = / { sub(".* CN = ",""); sub(" ,.*", ""); print $0 }'))
-	@{ [[ $(CN) ]] && [[ $(CERT_USAGE) =~ serverAuth ]]; } && echo 'subjectAltName = DNS:$(CN), DNS:www.$(CN)' >> $(CASTATE)/exts.conf || :
-
-server: CERT_USAGE = serverAuth
-server: server_ext cert
-
-mixed: CERT_USAGE = clientAuth, serverAuth
-mixed: server_ext cert
-
-cert: cacert $(CERT_FILE)
+mixed: REQ_OPTS += extendedKeyUsage=serverAuth,clientAuth
+mixed: REQ_OPTS += subjectAltName=DNS:$${REQ_CN}
+mixed: $(CERT_REQ_FILE) | printr
 
 $(CERT_FILE): $(CERT_REQ_FILE) | $(CA_DEPS)
 	$(CA) -out '$@' $(EXT_OPTS) -infiles $(CERT_REQ_FILE)
@@ -205,15 +254,16 @@ $(CERT_FILE): $(CERT_REQ_FILE) | $(CA_DEPS)
 	@echo -n 'Certificate: $@'
 	@echo -e '\033[0m'
 
+sign: $(CERT_FILE)
+
 verify: hasca hascert
 	$(VERIFY) -CAfile $(CA_CERT_FILE) $(CERT_FILE)
 
 crl: $(CASTATE)/crlnumber | $(CA_DEPS) $(CATOP)/crl
 	$(eval CRL_FILE := $(CATOP)/crl/crl$(shell cat $(CASTATE)/crlnumber).pem)
-	$(CA) -gencrl $(CRLDAYS) \
-		-out $(CRL_FILE)
-	@chmod 644 $(CRL_FILE)
-	@ln -sf $(CRL_FILE) $(CRL_LINK)
+	$(CA) -gencrl -out $(CRL_FILE)
+	chmod 644 $(CRL_FILE)
+	ln -sf $(CRL_FILE) $(CRL_LINK)
 	@echo -ne '\033[1;32m'
 	@echo -n 'CRL is in $(CRL_FILE)'
 	@echo -e '\033[0m'
@@ -223,11 +273,15 @@ revoke_cert: $(CERT_FILE) | $(CA_DEPS)
 
 revoke: revoke_cert crl
 
-print:
-	@[[ -r $(CERT_FILE) ]] || { echo 'Unable to read $(CERT_FILE)!'; false; }
+print: hascert
 	@$(X509) -noout -text -in $(CERT_FILE)
 
-clean:
+printr: hasreq
+	@$(REQ) -noout -text -in $(CERT_REQ_FILE)
+
+remove:
+	@read -p "Removing cert/req/key for $(NAME), are you sure? (y/N): "; \
+	[[ $$REPLY =~ y|Y ]]
 	$(RM) \
 		$(CERT_REQ_FILE) \
 		$(CERT_KEY_FILE) \
