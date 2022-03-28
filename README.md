@@ -26,7 +26,8 @@ print  - Print a ceritificate.
 ~~~~
 
 By default, the CA will use the prime256v1 elliptical curve key type.
-To use RSA, update Makefile with `KEYOPTS = -newkey rsa:2048`
+To use RSA, use `KEYOPTS = -newkey rsa:2048`
+Default expiration is 10 years, change with `DAYS = -days #`
 
 ## Setup
 
@@ -62,7 +63,7 @@ Updates:
 
 ## Basic Usage
 
-### Create a new certificate request and key
+### Create a new certificate request and key (default NAME is *new*)
 
 ~~~~
 make NAME=mycert req - will prompt for "CN"

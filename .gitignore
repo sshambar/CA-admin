@@ -1,0 +1,9 @@
+*~
+.*.sw?
+*.bak
+/certs
+/crl
+/newcerts
+/private
+/reqs
+/state

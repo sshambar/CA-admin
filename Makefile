@@ -1,10 +1,10 @@
 #
 # CA Admin - OpenSSL Certificate Authority Administration
 #
-# Version: 1.0.0
+# Version: 1.1.0
 # Author: Scott Shambarger <devel@shambarger.net>
 #
-# Copyright (C) 2018 Scott Shambarger
+# Copyright (C) 2018-2020 Scott Shambarger
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -41,7 +41,7 @@ REQ = $(OPENSSL) req -config $(CACONF)
 REQ_DEPS = $(CATOP)/reqs $(CATOP)/private $(CACONF)
 CA = $(OPENSSL) ca -config $(CACONF)
 # these should match $(CACONF) entries
-CA_DEPS = $(CATOP)/certs $(CATOP)/crl $(CATOP)/private $(CATOP)/newcerts
+CA_DEPS = $(CATOP)/certs $(CATOP)/crl $(CATOP)/private $(CATOP)/newcerts $(CATOP)/reqs
 CA_DEPS += $(CASTATE)/serial $(CASTATE)/index.txt $(CACONF)
 VERIFY = $(OPENSSL) verify
 X509 = $(OPENSSL) x509
@@ -71,6 +71,10 @@ endif
 help:
 	@echo 'CA-admin manages your OpenSSL CA'
 	@echo ''
+	@echo 'make <cmd> [ NAME=<certname> ]'
+	@echo ''
+	@echo '<certname> is "new" by default'
+	@echo '<cmd> can be:'
 	@echo 'init   - Create & initialize ca directory.'
 	@echo 'careq  - Create certificate request of CA.'
 	@echo 'cacert - Sign certificate request of CA.'
@@ -88,6 +92,7 @@ help:
 	@echo 'CATOP:  $(CATOP)'
 	@echo 'CACONF: $(CACONF)'
 	@echo 'CASTATE: $(CASTATE)'
+	@echo 'KEYOPTS: $(KEYOPTS)'
 
 debug:
 	@echo 'CATOP:  $(CATOP)'
@@ -153,6 +158,12 @@ $(CA_CERT_FILE): $(CA_CERT_REQ_FILE) $(CA_CERT_KEY_FILE) | $(CA_DEPS)
 		-infiles $(CA_CERT_REQ_FILE)
 	@chmod 644 '$@'
 
+hasca:
+	@[[ -f $(CA_CERT_FILE) ]] || { echo 'Missing CA cert: $(CA_CERT_FILE)'; false; }
+
+hascert:
+	@[[ -f $(CERT_FILE) ]] || { echo 'Missing cert file: $(CERT_FILE)'; false; }
+
 req: $(CERT_KEY_FILE) $(CERT_REQ_FILE)
 
 $(CERT_REQ_FILE): | $(CATOP)/reqs
@@ -161,7 +172,7 @@ $(CERT_REQ_FILE) $(CERT_KEY_FILE): | $(REQ_DEPS)
 	$(REQ) -new \
 		$(KEYOPTS) \
 		-nodes -keyout $(CERT_KEY_FILE) \
-		-out $(CERT_REQ_FILE) $(DAYS)
+		-out $(CERT_REQ_FILE)
 	@chmod 600 $(CERT_KEY_FILE) $(CERT_REQ_FILE)
 
 new_ext: cacert $(CERT_REQ_FILE) | $(CASTATE)
@@ -176,7 +187,7 @@ client: new_ext cert
 
 server_ext: new_ext
 	$(eval CN := $(shell $(OPENSSL) req -in $(CERT_REQ_FILE) -noout -text | awk -e '/Subject: CN = / { sub(".* CN = ",""); sub(" ,.*", ""); print $0 }'))
-	@{ [ -n '$(CN)' ] && [[ '$(CERT_USAGE)' =~ serverAuth ]]; } && echo 'subjectAltName = DNS:$(CN)' >> $(CASTATE)/exts.conf || :
+	@{ [[ $(CN) ]] && [[ $(CERT_USAGE) =~ serverAuth ]]; } && echo 'subjectAltName = DNS:$(CN), DNS:www.$(CN)' >> $(CASTATE)/exts.conf || :
 
 server: CERT_USAGE = serverAuth
 server: server_ext cert
@@ -188,13 +199,13 @@ cert: cacert $(CERT_FILE)
 
 $(CERT_FILE): $(CERT_REQ_FILE) | $(CA_DEPS)
 	$(CA) -out '$@' $(EXT_OPTS) -infiles $(CERT_REQ_FILE)
-	@[ -s '$@' ] || { $(RM) '$@'; false; }
+	@[[ -s $@ ]] || { $(RM) '$@'; false; }
 	@chmod 644 '$@'
 	@echo -ne '\033[1;32m'
 	@echo -n 'Certificate: $@'
 	@echo -e '\033[0m'
 
-verify: $(CERT_FILE) $(CA_CERT_FILE)
+verify: hasca hascert
 	$(VERIFY) -CAfile $(CA_CERT_FILE) $(CERT_FILE)
 
 crl: $(CASTATE)/crlnumber | $(CA_DEPS) $(CATOP)/crl
@@ -213,7 +224,7 @@ revoke_cert: $(CERT_FILE) | $(CA_DEPS)
 revoke: revoke_cert crl
 
 print:
-	@[ -r '$(CERT_FILE)' ] || { echo 'Unable to read $(CERT_FILE)!'; false; }
+	@[[ -r $(CERT_FILE) ]] || { echo 'Unable to read $(CERT_FILE)!'; false; }
 	@$(X509) -noout -text -in $(CERT_FILE)
 
 clean:
