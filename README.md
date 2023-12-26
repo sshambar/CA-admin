@@ -11,16 +11,22 @@ make help
 
 CA-admin manages your OpenSSL CA
 
-make <cmd> [ NAME=<certname> ] [ KEYTYPE=rsa|ec ]
+make <cmd> [ NAME=<certname> ] [ KEYTYPE=rsa|ec ]...
 
 Defaults:
   NAME = new
   KEYTYPE = ec
-  KEY_OPTS = 
-  CAROOT = $(pwd)
+  KEY_OPTS(rsa) = -newkey rsa:2048
+  KEY_OPTS(ec) = -newkey ec -pkeyopt ec_paramgen_curve:prime256v1
+  CAROOT = /opt/devel/work/CA-admin
   CACONF = $(CAROOT)/openssl-ca.conf
   CATOP = $(CAROOT)/$(KEYTYPE)
   CASTATE = $(CATOP)/state
+
+Optional parameters:
+  REQ_SUBJ = ( <commanName> or CN=<name>,O=<org>,... )
+  REQ_ALT_NAMES = ( <hostname> or DNS:<hostname>,IP:<ip>,... )
+  CA_OPTS = ( extra options for ca command )
 
 <cmd> can be:
   init   - Create & initialize ca directory.
@@ -32,9 +38,10 @@ Defaults:
   mixed  - Create certificate request for client/server.
   verify - Verify certificate.
   revoke - Revoke certificate.
+  remove - Remove certificate, request and/or key.
   crl    - Generate CRL.
   print  - Print a ceritificate.
-  printr - Print a request.
+  printr - Print a request.CA-admin manages your OpenSSL CA
 ~~~~
 
 Default keytype is prime256v1 elliptical curve, if `KEYTYPE=rsa` then

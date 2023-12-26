@@ -1,10 +1,10 @@
 #
 # CA Admin - OpenSSL Certificate Authority Administration
 #
-# Version: 2.0.0
+# Version: 2.1.0
 # Author: Scott Shambarger <devel@shambarger.net>
 #
-# Copyright (C) 2018-2022 Scott Shambarger
+# Copyright (C) 2018-2023 Scott Shambarger
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@
 #
 space := $(NULL) $(NULL)
 myescape = $(subst $(space),\$(space),$(1))
+SHELL = /bin/bash
 
 # RSA defaults
 override DEF_RSA_KEY_OPTS = -newkey rsa:2048
@@ -32,7 +33,7 @@ override DEF_EC_KEY_OPTS = -newkey ec -pkeyopt ec_paramgen_curve:prime256v1
 
 # param defaults:
 override DEF_KEYTYPE = ec
-override DEF_KEYOPTS := $(DEF_RSA_KEYOPTS)
+override DEF_KEY_OPTS := $(DEF_EC_KEY_OPTS)
 override DEF_NAME = new
 # CAROOT must be an absolute path
 CAROOT := $(call myescape,$(PWD))
@@ -84,8 +85,8 @@ CERT_KEY_FILE = $(PRIV_DIR)/$(NAME).key
 CERT_FILE = $(CERTS_DIR)/$(NAME).crt
 
 override EXT_FILE = $(CATOP)/tmp.conf
-REQ_OPTS = subjectKeyIdentifier=hash 
-REQ_OPTS += keyUsage=critical,digitalSignature,keyEncipherment
+override REQ_OPTS = subjectKeyIdentifier=hash
+override REQ_OPTS += keyUsage=critical,digitalSignature,keyEncipherment
 
 CRL_LINK = $(CATOP)/crl/crl.pem
 
@@ -107,16 +108,22 @@ override CA_DEPS += $(CASTATE)/serial $(CASTATE)/index.txt
 help:
 	@echo 'CA-admin manages your OpenSSL CA'
 	@echo
-	@echo 'make <cmd> [ NAME=<certname> ] [ KEYTYPE=rsa|ec ]'
+	@echo 'make <cmd> [ NAME=<certname> ] [ KEYTYPE=rsa|ec ]...'
 	@echo
 	@echo 'Defaults:'
 	@echo '  NAME = $(value DEF_NAME)'
 	@echo '  KEYTYPE = $(value DEF_KEYTYPE)'
-	@echo '  KEY_OPTS = $(value DEF_KEY_OPTS)'
+	@echo '  KEY_OPTS(rsa) = $(value DEF_RSA_KEY_OPTS)'
+	@echo '  KEY_OPTS(ec) = $(value DEF_EC_KEY_OPTS)'
 	@echo '  CAROOT = $(value CAROOT)'
 	@echo '  CACONF = $(value DEF_CACONF)'
 	@echo '  CATOP = $(value DEF_CATOP)'
 	@echo '  CASTATE = $(value DEF_CASTATE)'
+	@echo
+	@echo 'Optional parameters:'
+	@echo '  REQ_SUBJ = ( <commanName> or CN=<name>,O=<org>,... )'
+	@echo '  REQ_ALT_NAMES = ( <hostname> or DNS:<hostname>,IP:<ip>,... )'
+	@echo '  CA_OPTS = ( extra options for ca command )'
 	@echo
 	@echo '<cmd> can be:'
 	@echo '  init   - Create & initialize ca directory.'
@@ -128,6 +135,7 @@ help:
 	@echo '  mixed  - Create certificate request for client/server.'
 	@echo '  verify - Verify certificate.'
 	@echo '  revoke - Revoke certificate.'
+	@echo '  remove - Remove certificate, request and/or key.'
 	@echo '  crl    - Generate CRL.'
 	@echo '  print  - Print a ceritificate.'
 	@echo '  printr - Print a request.'
@@ -214,40 +222,50 @@ hasreq:
 # (also, -text prints something different that whats in req produced)
 # so we create a temporary config
 $(CERT_REQ_FILE) $(CERT_KEY_FILE): | hasca $(REQ_DEPS)
-	@[[ $$REQ_CN ]] || read -p "Enter CommonName: " REQ_CN; \
+	@[[ $$REQ_SUBJ ]] || { \
+	  echo "Subject can be value for commonName, or XX=a,YY=b,... format"; \
+	  read -p "Subject: " REQ_SUBJ; \
+	  [[ $$REQ_SUBJ ]] || { echo "Subject required!"; exit 1; }; }; \
+	[[ $$REQ_ALT_NAMES ]] || { \
+	  echo "Optional Subject Alt Names - <domainname> or DNS:<domain>,IP:<ip>... format" ; \
+	  read -p "Alt. Names: " REQ_ALT_NAMES; }; \
 	rm -f $(EXT_FILE); \
-	echo "[ req ]" >> $(EXT_FILE) || exit; \
-	echo "default_md = sha256" >> $(EXT_FILE); \
-	echo "req_extensions = v3_req" >> $(EXT_FILE); \
-	echo "distinguished_name = req_name" >> $(EXT_FILE); \
-	echo "[ req_name ]" >> $(EXT_FILE); \
-	echo "commonName = Common Name" >> $(EXT_FILE); \
-	echo "[ v3_req ]" >> $(EXT_FILE); \
-	for item in $(REQ_OPTS); do \
-	  echo "$$item" >> $(EXT_FILE) || exit; \
-	done; \
+	{ echo "[ req ]"; \
+	  echo "default_md = sha256"; \
+	  echo "req_extensions = v3_req"; \
+	  echo "[ v3_req ]"; \
+	  for item in $(REQ_OPTS); do echo "$$item"; done; \
+	} >> $(EXT_FILE) || exit; \
+	X=1 IFS=,; for item in $${REQ_ALT_NAMES}; do \
+	  [[ $$X == 1 ]] && { \
+	    echo "subjectAltName = @subj_alt_section"; \
+	    echo "[subj_alt_section]"; } >> $(EXT_FILE); \
+	  [[ $${item%%:*} == "$${item}" ]] && type=DNS || type=$${item%%:*}; \
+	  echo "$${type}.$$X = $${item#*:}" >> $(EXT_FILE); \
+	  X=$$((++X)); done; \
+	subj=''; for item in $${REQ_SUBJ}; do \
+	  [[ $${item%%=*} == "$${item}" ]] && item="CN=$${item}"; \
+	  subj="$$item/$$subj"; done; unset IFS; \
 	$(REQ) -new -batch -config $(EXT_FILE) \
 		$(KEY_OPTS) \
-		-subj "/CN=$${REQ_CN}/" \
+		-subj "/$${subj}" \
 		-nodes \
 		-keyout $(CERT_KEY_FILE) \
 		-out $(CERT_REQ_FILE)
 	@rm -f $(EXT_FILE)
 	chmod 600 $(CERT_KEY_FILE) $(CERT_REQ_FILE)
 
-client: REQ_OPTS += extendedKeyUsage=clientAuth
+client: override REQ_OPTS += extendedKeyUsage=clientAuth
 client: $(CERT_REQ_FILE) | printr
 
-server: REQ_OPTS += extendedKeyUsage=serverAuth
-server: REQ_OPTS += subjectAltName=DNS:$${REQ_CN}
+server: override REQ_OPTS += extendedKeyUsage=serverAuth
 server: $(CERT_REQ_FILE) | printr
 
-mixed: REQ_OPTS += extendedKeyUsage=serverAuth,clientAuth
-mixed: REQ_OPTS += subjectAltName=DNS:$${REQ_CN}
+mixed: override REQ_OPTS += extendedKeyUsage=serverAuth,clientAuth
 mixed: $(CERT_REQ_FILE) | printr
 
 $(CERT_FILE): $(CERT_REQ_FILE) | $(CA_DEPS)
-	$(CA) -out '$@' $(EXT_OPTS) -infiles $(CERT_REQ_FILE)
+	$(CA) -out '$@' -preserveDN $(CA_OPTS) -infiles $(CERT_REQ_FILE)
 	@[[ -s $@ ]] || { $(RM) '$@'; false; }
 	@chmod 644 '$@'
 	@echo -ne '\033[1;32m'
@@ -280,7 +298,7 @@ printr: hasreq
 	@$(REQ) -noout -text -in $(CERT_REQ_FILE)
 
 remove:
-	@read -p "Removing cert/req/key for $(NAME), are you sure? (y/N): "; \
+	@read -p "Removing cert/req/key for NAME=$(NAME), are you sure? (y/N): "; \
 	[[ $$REPLY =~ y|Y ]]
 	$(RM) \
 		$(CERT_REQ_FILE) \
