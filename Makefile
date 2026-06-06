@@ -1,10 +1,10 @@
 #
 # CA Admin - OpenSSL Certificate Authority Administration
 #
-# Version: 2.1.0
+# Version: 2.1.1
 # Author: Scott Shambarger <devel@shambarger.net>
 #
-# Copyright (C) 2018-2023 Scott Shambarger
+# Copyright (C) 2018-2026 Scott Shambarger
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -133,6 +133,7 @@ help:
 	@echo '  server - Create certificate request for server cert.'
 	@echo '  client - Create certificate request for client cert.'
 	@echo '  mixed  - Create certificate request for client/server.'
+	@echo '  req    - Create certificate request w/o extended usage.'
 	@echo '  verify - Verify certificate.'
 	@echo '  revoke - Revoke certificate.'
 	@echo '  remove - Remove certificate, request and/or key.'
@@ -263,6 +264,8 @@ server: $(CERT_REQ_FILE) | printr
 
 mixed: override REQ_OPTS += extendedKeyUsage=serverAuth,clientAuth
 mixed: $(CERT_REQ_FILE) | printr
+
+req: $(CERT_REQ_FILE) | printr
 
 $(CERT_FILE): $(CERT_REQ_FILE) | $(CA_DEPS)
 	$(CA) -out '$@' -preserveDN $(CA_OPTS) -infiles $(CERT_REQ_FILE)
